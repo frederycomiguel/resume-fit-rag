@@ -1,0 +1,165 @@
+{
+  "name": "WhatsApp Resume Fit RAG",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-inbound",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "2a2b2b20-0002-4b2b-8b2b-000000000001",
+      "name": "Webhook (WAHA)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-60, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// WAHA marca mensagens com mídia via payload.hasMedia (ou payload._data.mimetype\n// dependendo da versão). Ajuste esse trecho depois de olhar um payload real —\n// não deu pra testar contra um WAHA de verdade nesse momento.\nconst payload = $input.first().json.body.payload;\nconst hasMedia = !!(payload.hasMedia || payload.media || (payload._data && payload._data.mimetype));\nreturn [{\n  json: {\n    from: payload.from,\n    body: payload.body || '',\n    hasMedia,\n    mediaUrl: payload.media?.url || payload.mediaUrl || null,\n  },\n}];"
+      },
+      "id": "2a2b2b20-0002-4b2b-8b2b-000000000002",
+      "name": "Extrair mensagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [160, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            { "leftValue": "={{ $json.hasMedia }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2a2b2b20-0002-4b2b-8b2b-000000000003",
+      "name": "Tem PDF anexado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [380, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.mediaUrl }}",
+        "options": { "response": { "response": { "responseFormat": "file" } } }
+      },
+      "id": "2a2b2b20-0002-4b2b-8b2b-000000000004",
+      "name": "Baixar PDF do WAHA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [600, -80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const binary = $input.first().binary.data;\nconst base64 = binary.data; // n8n já guarda o conteúdo binário em base64 aqui\nreturn [{ json: { resumeBase64: base64, from: $('Extrair mensagem').item.json.from } }];"
+      },
+      "id": "2a2b2b20-0002-4b2b-8b2b-000000000005",
+      "name": "Converter pra base64",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [820, -80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:3002/upload-resume",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"resumeBase64\": $json.resumeBase64 } }}",
+        "options": {}
+      },
+      "id": "2a2b2b20-0002-4b2b-8b2b-000000000006",
+      "name": "Enviar currículo pra API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, -80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $json;\nif (r.error) {\n  return [{ json: { from: $('Converter pra base64').item.json.from, text: 'Erro processando o currículo: ' + r.error } }];\n}\nconst top = r.results.slice(0, 3).map(v => `${v.empresa} — ${v.cargo}: ${v.nota}/100`).join('\\n');\nconst text = `${r.message}\\n\\nTop 3:\\n${top}\\n\\nPergunte o que quiser sobre as vagas analisadas.`;\nreturn [{ json: { from: $('Converter pra base64').item.json.from, text } }];"
+      },
+      "id": "2a2b2b20-0002-4b2b-8b2b-000000000007",
+      "name": "Formatar resumo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1260, -80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:3002/ask",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"question\": $json.body } }}",
+        "options": {}
+      },
+      "id": "2a2b2b20-0002-4b2b-8b2b-000000000008",
+      "name": "Perguntar pra API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [600, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $json;\nconst text = r.error ? r.error : r.answer;\nreturn [{ json: { from: $('Extrair mensagem').item.json.from, text } }];"
+      },
+      "id": "2a2b2b20-0002-4b2b-8b2b-000000000009",
+      "name": "Formatar resposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [820, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WAHA_URL }}/api/sendText",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "X-Api-Key", "value": "={{ $env.WAHA_API_KEY }}" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"session\": \"default\", \"chatId\": $json.from, \"text\": $json.text } }}",
+        "options": {}
+      },
+      "id": "2a2b2b20-0002-4b2b-8b2b-00000000000a",
+      "name": "Responder no WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1480, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": true } }}"
+      },
+      "id": "2a2b2b20-0002-4b2b-8b2b-00000000000b",
+      "name": "Responder ao webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1700, 0]
+    }
+  ],
+  "connections": {
+    "Webhook (WAHA)": { "main": [[{ "node": "Extrair mensagem", "type": "main", "index": 0 }]] },
+    "Extrair mensagem": { "main": [[{ "node": "Tem PDF anexado?", "type": "main", "index": 0 }]] },
+    "Tem PDF anexado?": {
+      "main": [
+        [{ "node": "Baixar PDF do WAHA", "type": "main", "index": 0 }],
+        [{ "node": "Perguntar pra API", "type": "main", "index": 0 }]
+      ]
+    },
+    "Baixar PDF do WAHA": { "main": [[{ "node": "Converter pra base64", "type": "main", "index": 0 }]] },
+    "Converter pra base64": { "main": [[{ "node": "Enviar currículo pra API", "type": "main", "index": 0 }]] },
+    "Enviar currículo pra API": { "main": [[{ "node": "Formatar resumo", "type": "main", "index": 0 }]] },
+    "Formatar resumo": { "main": [[{ "node": "Responder no WhatsApp", "type": "main", "index": 0 }]] },
+    "Perguntar pra API": { "main": [[{ "node": "Formatar resposta", "type": "main", "index": 0 }]] },
+    "Formatar resposta": { "main": [[{ "node": "Responder no WhatsApp", "type": "main", "index": 0 }]] },
+    "Responder no WhatsApp": { "main": [[{ "node": "Responder ao webhook", "type": "main", "index": 0 }]] }
+  },
+  "meta": { "instanceId": "resume-fit-rag" }
+}

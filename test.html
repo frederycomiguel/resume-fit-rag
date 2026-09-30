@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Teste — Resume Fit RAG</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; background: #0f1115; color: #e8eaed; }
+  h1 { font-size: 20px; }
+  h2 { font-size: 15px; color: #9aa0a6; margin-top: 30px; }
+  textarea, button, input { font-size: 15px; font-family: inherit; }
+  textarea { width: 100%; height: 60px; padding: 10px; border-radius: 8px; border: 1px solid #333; background: #1a1d23; color: #e8eaed; resize: vertical; }
+  button { margin-top: 10px; padding: 10px 18px; border-radius: 8px; border: none; background: #4fd1c0; color: #06110f; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  .answer { margin-top: 20px; padding: 14px; background: #1a1d23; border-radius: 8px; white-space: pre-wrap; line-height: 1.5; }
+  .sources { margin-top: 14px; font-size: 13px; color: #9aa0a6; }
+  .source-item { padding: 8px 0; border-top: 1px dashed #333; }
+  .nota { color: #4fd1c0; font-weight: 600; }
+  input[type=file] { margin-top: 10px; }
+</style>
+</head>
+<body>
+  <h1>Resume Fit RAG — teste local</h1>
+  <p style="color:#9aa0a6">1. Envie seu currículo (PDF). 2. Espere a avaliação contra as 12 vagas reais. 3. Pergunte o que quiser.</p>
+
+  <h2>1. Enviar currículo</h2>
+  <input type="file" id="file" accept="application/pdf">
+  <br>
+  <button id="uploadBtn" onclick="upload()">Enviar currículo</button>
+  <div id="uploadResult"></div>
+
+  <h2>2. Perguntar</h2>
+  <textarea id="q" placeholder="Ex: qual vaga tem a melhor nota?"></textarea>
+  <br>
+  <button id="askBtn" onclick="ask()">Perguntar</button>
+  <div id="askResult"></div>
+
+<script>
+function toBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function upload() {
+  const fileInput = document.getElementById('file');
+  const btn = document.getElementById('uploadBtn');
+  const result = document.getElementById('uploadResult');
+  if (!fileInput.files[0]) { alert('Escolhe um PDF primeiro'); return; }
+
+  btn.disabled = true;
+  result.innerHTML = '<p style="color:#9aa0a6">Extraindo texto e avaliando contra as vagas (pode levar 1-2 minutos, uma chamada ao Gemini por vaga)...</p>';
+
+  try {
+    const b64 = await toBase64(fileInput.files[0]);
+    const res = await fetch('http://localhost:3002/upload-resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resumeBase64: b64 }),
+    });
+    const data = await res.json();
+
+    if (data.error) {
+      result.innerHTML = '<div class="answer" style="color:#f87171">' + data.error + '</div>';
+      return;
+    }
+
+    let html = '<div class="answer">' + data.message + '</div><div class="sources">';
+    for (const r of data.results) {
+      html += '<div class="source-item">' + r.empresa + ' — ' + r.cargo + ' — <span class="nota">' + r.nota + '/100</span> (compat ' + r.compat + '%)</div>';
+    }
+    html += '</div>';
+    result.innerHTML = html;
+  } catch (e) {
+    result.innerHTML = '<div class="answer" style="color:#f87171">Falha: ' + e.message + '</div>';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function ask() {
+  const q = document.getElementById('q').value.trim();
+  if (!q) return;
+  const btn = document.getElementById('askBtn');
+  const result = document.getElementById('askResult');
+  btn.disabled = true;
+  result.innerHTML = '<p style="color:#9aa0a6">Pensando...</p>';
+
+  try {
+    const res = await fetch('http://localhost:3002/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q }),
+    });
+    const data = await res.json();
+
+    if (data.error) {
+      result.innerHTML = '<div class="answer" style="color:#f87171">' + data.error + '</div>';
+      return;
+    }
+
+    let html = '<div class="answer">' + data.answer + '</div>';
+    if (data.sources && data.sources.length) {
+      html += '<div class="sources"><strong>Fontes (' + data.sources.length + '):</strong>';
+      for (const s of data.sources) {
+        html += '<div class="source-item">' + s.empresa + ' — ' + s.cargo + ' — <span class="nota">' + s.nota + '/100</span></div>';
+      }
+      html += '</div>';
+    }
+    result.innerHTML = html;
+  } catch (e) {
+    result.innerHTML = '<div class="answer" style="color:#f87171">Falha: ' + e.message + '</div>';
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>
